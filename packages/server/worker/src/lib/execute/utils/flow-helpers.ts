@@ -1,5 +1,5 @@
 import { type ApLogger } from '@activepieces/server-utils'
-import { FlowActionType, flowStructureUtil, FlowTriggerType, FlowVersion, PiecePackage, tryCatch, WorkerToApiContract } from '@activepieces/shared'
+import { AgentPieceTool, FlowActionType, flowStructureUtil, FlowTriggerType, FlowVersion, PiecePackage, Step, tryCatch, WorkerToApiContract } from '@activepieces/shared'
 import { CodeArtifact } from '../../cache/code/code-builder'
 import { pieceCache, PieceNotFoundError } from '../../cache/pieces/piece-cache'
 import { provisioner } from '../../cache/provisioner'
@@ -35,14 +35,21 @@ export async function provisionFlowPieces(params: {
 }
 
 export async function extractPiecePackages(flowVersion: FlowVersion, platformId: string, log: ApLogger, apiClient: WorkerToApiContract): Promise<PiecePackage[]> {
-    const pieceSteps = flowStructureUtil.getAllSteps(flowVersion.trigger)
+    const allSteps = flowStructureUtil.getAllSteps(flowVersion.trigger)
+
+    const stepPieceRefs = allSteps
         .filter((step) => step.type === FlowActionType.PIECE || step.type === FlowTriggerType.PIECE)
+        .map((step) => ({ pieceName: step.settings.pieceName, pieceVersion: step.settings.pieceVersion }))
+
+    const agentToolPieceRefs = allSteps.flatMap(extractAgentToolPieceRefs)
+
+    const uniquePieceRefs = dedupePieceRefs([...stepPieceRefs, ...agentToolPieceRefs])
 
     return Promise.all(
-        pieceSteps.map((step) =>
+        uniquePieceRefs.map((ref) =>
             pieceCache(log, apiClient).getPiece({
-                pieceName: step.settings.pieceName,
-                pieceVersion: step.settings.pieceVersion,
+                pieceName: ref.pieceName,
+                pieceVersion: ref.pieceVersion,
                 platformId,
             }),
         ),
@@ -58,4 +65,37 @@ export function extractCodeArtifacts(flowVersion: FlowVersion): CodeArtifact[] {
             flowVersionId: flowVersion.id,
             flowVersionState: flowVersion.state,
         }))
+}
+
+function extractAgentToolPieceRefs(step: Step): PieceRef[] {
+    if (step.type !== FlowActionType.PIECE) {
+        return []
+    }
+    const agentTools = step.settings.input['agentTools']
+    if (!Array.isArray(agentTools)) {
+        return []
+    }
+    return agentTools.flatMap((tool: unknown) => {
+        const parsed = AgentPieceTool.safeParse(tool)
+        if (!parsed.success) {
+            return []
+        }
+        return [{
+            pieceName: parsed.data.pieceMetadata.pieceName,
+            pieceVersion: parsed.data.pieceMetadata.pieceVersion,
+        }]
+    })
+}
+
+function dedupePieceRefs(refs: PieceRef[]): PieceRef[] {
+    const byKey = new Map<string, PieceRef>()
+    for (const ref of refs) {
+        byKey.set(`${ref.pieceName}@${ref.pieceVersion}`, ref)
+    }
+    return [...byKey.values()]
+}
+
+type PieceRef = {
+    pieceName: string
+    pieceVersion: string
 }

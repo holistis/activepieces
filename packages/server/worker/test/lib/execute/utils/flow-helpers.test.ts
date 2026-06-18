@@ -87,6 +87,46 @@ const codeAction = {
     },
 }
 
+const runAgentActionWithTools = {
+    name: 'step_1',
+    valid: true,
+    displayName: 'Run Agent',
+    type: FlowActionType.PIECE as const,
+    settings: {
+        pieceName: '@activepieces/piece-ai',
+        pieceVersion: '0.1.0',
+        actionName: 'run_agent',
+        input: {
+            agentTools: [
+                {
+                    type: 'PIECE',
+                    toolName: 'perplexity-ask-ai_mcp',
+                    pieceMetadata: {
+                        pieceName: '@activepieces/piece-perplexity-ai',
+                        pieceVersion: '0.2.8',
+                        actionName: 'ask-ai',
+                    },
+                },
+                {
+                    type: 'PIECE',
+                    toolName: 'gmail-dup_mcp',
+                    pieceMetadata: {
+                        pieceName: '@activepieces/piece-gmail',
+                        pieceVersion: '0.1.0',
+                        actionName: 'send_email',
+                    },
+                },
+                {
+                    type: 'FLOW',
+                    toolName: 'subflow_mcp',
+                    externalFlowId: 'flow-123',
+                },
+            ],
+        },
+        propertySettings: {},
+    },
+}
+
 const mockLog = {} as any
 const mockApiClient = {} as any
 const mockPlatformId = 'platform-1'
@@ -140,6 +180,21 @@ describe('extractPiecePackages', () => {
         expect(packages).toHaveLength(2)
         expect(packages[0].pieceName).toBe('@activepieces/piece-gmail')
         expect(packages[1].pieceName).toBe('@activepieces/piece-slack')
+    })
+
+    it('provisions pieces referenced as agent tools, deduped and ignoring non-piece tools', async () => {
+        const fv = makeFlowVersion({
+            ...pieceTrigger,
+            nextAction: { ...runAgentActionWithTools },
+        })
+        const packages = await extractPiecePackages(fv, mockPlatformId, mockLog, mockApiClient)
+        const ids = packages.map((p) => `${p.pieceName}@${p.pieceVersion}`)
+
+        expect(ids).toContain('@activepieces/piece-perplexity-ai@0.2.8')
+        expect(ids).toContain('@activepieces/piece-ai@0.1.0')
+        expect(ids).toContain('@activepieces/piece-gmail@0.1.0')
+        expect(ids).not.toContain('flow-123')
+        expect(ids).toHaveLength(3)
     })
 })
 
